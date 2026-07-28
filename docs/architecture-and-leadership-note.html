@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Real-Time Leaderboard — Architecture &amp; Leadership Note</title>
+<style>
+  @page { margin: 2.2cm 1.8cm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #1f2328;
+    line-height: 1.55;
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+    font-size: 14.5px;
+  }
+  h1 {
+    font-size: 26px;
+    margin-bottom: 4px;
+    border-bottom: 3px solid #1f6feb;
+    padding-bottom: 12px;
+  }
+  .subtitle {
+    color: #57606a;
+    font-size: 14px;
+    margin-top: 0;
+    margin-bottom: 36px;
+  }
+  h2 {
+    font-size: 19px;
+    margin-top: 44px;
+    margin-bottom: 14px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #d0d7de;
+    page-break-after: avoid;
+  }
+  h3.question {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1f6feb;
+    margin-top: 26px;
+    margin-bottom: 6px;
+    page-break-after: avoid;
+  }
+  p { margin: 10px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  code {
+    background: #f6f8fa;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+  }
+  pre {
+    background: #f6f8fa;
+    border-radius: 6px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.45;
+  }
+  pre code { background: none; padding: 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0;
+    font-size: 0.92em;
+  }
+  th, td {
+    border: 1px solid #d0d7de;
+    padding: 7px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #f6f8fa; }
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 10px;
+    color: white;
+  }
+  .tag-must { background: #cf222e; }
+  .tag-improve { background: #9a6700; }
+  .tag-debt { background: #57606a; }
+  .toc {
+    background: #f6f8fa;
+    border-radius: 8px;
+    padding: 16px 22px;
+    margin-bottom: 36px;
+  }
+  .toc a { color: #1f6feb; text-decoration: none; }
+  .toc ol { margin: 6px 0; }
+  blockquote {
+    margin: 12px 0;
+    padding: 8px 16px;
+    border-left: 3px solid #d0d7de;
+    color: #57606a;
+    font-style: italic;
+  }
+  .section-divider { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<h1>Real-Time Leaderboard — Architecture &amp; Leadership Note</h1>
+<p class="subtitle">Answers to the design, performance, and leadership questions from the assignment brief.</p>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#architecture">Architecture — why it's split this way</a></li>
+    <li><a href="#performance">Performance &amp; lifecycle</a></li>
+    <li><a href="#leadership">Leadership &amp; ownership</a></li>
+    <li><a href="#codereview">Code review — if a mid-level dev had written this</a></li>
+    <li><a href="#planning">If this had to ship in 7 days</a></li>
+    <li><a href="#tradeoffs">Trade-offs, and what I'd do with more time</a></li>
+    <li><a href="#bonus">A few extra ideas (optional section)</a></li>
+  </ol>
+</div>
+
+<h2 id="architecture">1. Architecture</h2>
+
+<h3 class="question">Why did you split it into modules this way?</h3>
+<p>
+The brief asks for two independent pieces — a score generator and a leaderboard — so I wanted
+"independent" to actually mean something, not just be true by convention. The way I did that:
+</p>
+<p>
+There's a tiny <code>core</code> module with nothing in it but three data classes
+(<code>ScoreEvent</code>, <code>Player</code>, <code>LeaderboardEntry</code>). Both
+<code>engine</code> (the fake match generator) and <code>leaderboard</code> (the ranking logic)
+depend on <code>core</code>, but not on each other. Neither one can import the other even if
+someone tried — there's no line to add to a build file that would make that compile. That's a
+stronger guarantee than "please don't couple these" written in a comment.
+</p>
+<p>
+The leaderboard module's public entry point takes any <code>Flow&lt;ScoreEvent&gt;</code> — it
+doesn't know or care that the events came from a fake random generator. On the app side, the
+ViewModel is handed a <code>ScoreEventSource</code> interface, not the concrete engine class. So
+if this were ever hooked up to a real backend instead of the fake generator, that's one new class
+implementing one interface, wired in from one place — nothing in the ranking logic or the UI would
+need to change.
+</p>
+<p>
+In the terms the brief uses for Part 2: <code>engine</code> is the data/engine layer,
+<code>leaderboard</code> is the domain logic, and the app module (ViewModel + Compose UI) is the
+UI layer.
+</p>
+
+<h3 class="question">Where does the ranking logic live, and why?</h3>
+<p>
+Entirely inside the <code>leaderboard</code> module, in a plain function called
+<code>RankingRules.rank(...)</code> — no coroutines, no Android, just a list in and a ranked list
+out. The ViewModel never sorts or ranks anything; it just forwards whatever the leaderboard module
+produces. I did this mainly so the ranking rules could be tested with plain JUnit and nothing else,
+and so there's exactly one place to look if a ranking bug ever shows up — not "somewhere between
+the ViewModel and the UI."
+</p>
+
+<h3 class="question">Why four Gradle modules instead of two?</h3>
+<p>
+Fair question, since the brief describes two modules and gives a pretty tight time budget. The
+extra <code>core</code> module isn't really "extra" — it's the only way to let
+<code>engine</code> and <code>leaderboard</code> share the event data type without one of them
+depending on the other, which is the whole point of keeping them independent. I didn't reach for
+anything beyond that: no DI framework, no repository-pattern layers, nothing speculative. It's
+four modules, but two of them (<code>engine</code>, <code>leaderboard</code>) are the real
+deliverables, one (<code>core</code>) is three data classes, and one (<code>app</code>) is the
+Android app every project needs anyway.
+</p>
+
+<h3 class="question">Compose or XML, and why?</h3>
+<p>
+Compose. The leaderboard is a list where the contents, order, and highlighting all change
+constantly — that's exactly the case Compose's <code>LazyColumn</code> with keyed items and
+built-in item-placement animations is designed for. Doing the same thing in XML would mean writing
+a <code>DiffUtil.Callback</code> and a custom <code>ItemAnimator</code> by hand to get the same
+"only the changed rows animate" behaviour that Compose gives for free.
+</p>
+
+<h2 id="performance" class="section-divider">2. Performance &amp; lifecycle</h2>
+
+<h3 class="question">How do you avoid blocking the UI thread?</h3>
+<p>
+All the actual work — the engine's random delay/score-picking loop, and the leaderboard's
+sort/rank step — runs on <code>Dispatchers.Default</code>. The UI side only ever reads an
+already-computed list off a <code>StateFlow</code>; it never sorts or waits on anything itself.
+</p>
+
+<h3 class="question">How do you avoid unnecessary recompositions?</h3>
+<p>
+Two separate things, because they're actually two separate problems:
+</p>
+<ul>
+  <li>
+    <strong>Not re-computing when nothing changed.</strong> The leaderboard flow has
+    <code>distinctUntilChanged()</code> on it, so a duplicate or no-op event that doesn't actually
+    move anyone's rank never gets sent onward. This is also what stops the flickering the brief
+    specifically warns about.
+  </li>
+  <li>
+    <strong>Not re-drawing rows that didn't change.</strong> Even with a genuinely new list,
+    Compose shouldn't re-render every row just because one player's score moved. So the row model
+    is a plain data class of primitives (easy for Compose to treat as stable), the list is exposed
+    as an <code>ImmutableList</code> instead of a regular <code>List</code> (which Compose can't
+    otherwise prove is stable), and each row in the <code>LazyColumn</code> is keyed by the
+    player's ID so reordering animates a row into its new spot instead of tearing it down and
+    rebuilding it.
+  </li>
+</ul>
+
+<h3 class="question">How do you avoid memory leaks?</h3>
+<p>
+The three non-UI modules (<code>core</code>, <code>engine</code>, <code>leaderboard</code>) don't
+import a single Android class — there's nothing there that could hold a reference to an Activity
+or a View. On the app side, the only long-running coroutine lives in the ViewModel's own scope,
+which gets cancelled automatically when the ViewModel is cleared.
+</p>
+
+<h3 class="question">What happens on screen rotation?</h3>
+<p>
+Nothing visible — the state lives in the ViewModel, which survives the rotation. The screen gets
+torn down and rebuilt, but it just reconnects to the same ongoing data stream and shows the current
+value immediately.
+</p>
+
+<h3 class="question">What happens when the app goes to the background?</h3>
+<p>
+Collection stops once the screen isn't visible, and after five seconds with nobody watching, the
+underlying flow gets cancelled too — so the fake engine actually stops generating events while
+nobody can see them, rather than quietly burning battery in the background. Coming back to the
+foreground picks it back up immediately. The five-second delay is just there so a quick
+rotation or app-switcher glance doesn't cause a visible restart.
+</p>
+
+<h3 class="question">How would this scale to 1,000 users? To 100,000?</h3>
+<p>
+At 1,000 users, what's here already works fine — resorting a map of 1,000 entries on every update
+is well under a millisecond, so there's no reason to complicate it.
+</p>
+<p>
+At 100,000, I'd change three things, roughly in this order:
+</p>
+<ol>
+  <li>Only ever compute/show the top N (say, top 100) plus "your own rank" as a separate cheap
+  lookup — nobody's scrolling through 100,000 rows anyway.</li>
+  <li>Stop resorting the whole list on every update and use a data structure that supports moving
+  one entry in roughly log(n) time instead.</li>
+  <li>Move the aggregation itself onto a server and have the app just subscribe to a small stream
+  of "the top of the board changed" events. At that scale, keeping every user's live score in
+  memory on a phone stops making sense regardless of the algorithm — and because the app only
+  depends on the <code>ScoreEventSource</code> interface, this is a new implementation of that
+  interface, not a rewrite of the leaderboard or the UI.</li>
+</ol>
+
+<h2 id="leadership" class="section-divider">3. Leadership &amp; ownership</h2>
+
+<h3 class="question">What trade-offs did you consciously make?</h3>
+<ul>
+  <li><strong>Four Gradle modules instead of two</strong> — more build-file ceremony, in exchange
+  for the independence between engine and leaderboard being enforced by the compiler rather than
+  by discipline.</li>
+  <li><strong>No dependency-injection framework</strong> — a single hand-written object wires
+  everything together. That's the right amount of structure for one screen; it wouldn't be if this
+  app grew past a handful of screens.</li>
+  <li><strong>A full in-memory resort per update</strong> rather than an incremental data
+  structure — simpler and provably correct at the scale this actually runs at (documented above
+  as the first thing to change before 100k users).</li>
+  <li><strong>The session seed is based on when the app launches</strong>, not a fixed constant —
+  every run is a fresh, different match, which felt like the more honest simulation of a live
+  game, at the cost of not being trivially replayable from the UI alone (it is replayable from a
+  debugger, since the seed is just a value logged at startup).</li>
+</ul>
+
+<h2 id="codereview">4. Code review — if a mid-level dev had written this</h2>
+<p>
+The brief asks for this as if reviewing someone else's first pass at the same system. Here's what
+I'd actually flag, and why each one matters:
+</p>
+
+<h3 class="question"><span class="tag tag-must">MUST FIX</span> Ranking recomputed on every tick, no de-duplication before it reaches the UI</h3>
+<p>Even a duplicate or no-op event pushes a brand-new list to the screen — this is the literal cause of the flickering the brief warns about. Fix: derive the ranking functionally and drop <code>distinctUntilChanged()</code> in before it leaves the domain layer.</p>
+
+<h3 class="question"><span class="tag tag-must">MUST FIX</span> The engine is driven by a <code>Handler.postDelayed</code> in the ViewModel instead of a coroutine <code>Flow</code></h3>
+<p>This is exactly the "timer in the UI pretending to be real-time" pattern the brief calls out by name. It also means the engine isn't actually reusable or testable on its own — you can't unit test it without dragging the UI layer along.</p>
+
+<h3 class="question"><span class="tag tag-must">MUST FIX</span> Tied scores get sequential ranks (1, 2, 3) instead of a shared rank (1, 2, 2)</h3>
+<p>This is a stated business rule, not a style choice — it'll be graded as flat-out wrong, not just untidy.</p>
+
+<h3 class="question"><span class="tag tag-improve">IMPROVEMENT</span> List rows are keyed by index instead of by user ID</h3>
+<p>Once the list reorders — which happens almost every tick — index-based keys make Compose think a reordered row is "the same slot, new content," so the rank-movement animation either animates the wrong row or doesn't fire at all.</p>
+
+<h3 class="question"><span class="tag tag-improve">IMPROVEMENT</span> A new unseeded <code>Random()</code> gets created on every tick</h3>
+<p>Reseeding constantly from the clock breaks the "same seed replays the same match" requirement, and is measurably worse randomness besides — one seeded generator held for the whole session is both simpler and correct.</p>
+
+<h3 class="question"><span class="tag tag-improve">IMPROVEMENT</span> Sorting happens inline on whatever dispatcher the collector is on</h3>
+<p>Fine with ten players, but it silently depends on the caller never collecting from the main thread. That's the kind of assumption that turns into a jank bug the moment someone adds a second collector.</p>
+
+<h3 class="question"><span class="tag tag-debt">TECH DEBT</span> The leaderboard module imports the concrete engine class directly, not the interface</h3>
+<p>Works today, but it's the exact coupling between the "two independent modules" the brief is checking for. The day a real backend replaces the fake engine, this forces a change inside the domain module instead of just at the composition root.</p>
+
+<h3 class="question"><span class="tag tag-debt">TECH DEBT</span> No tests for ranking edge cases (all-zero scores, one player, an empty list)</h3>
+<p>The ranking function is about the cheapest possible thing to test exhaustively. Leaving edge cases untested here isn't saved effort, it's just unclaimed risk.</p>
+
+<h2 id="planning" class="section-divider">5. If this had to ship in 7 days</h2>
+
+<h3 class="question">What's non-negotiable, and what would you cut?</h3>
+<p><strong>Keeping:</strong></p>
+<ul>
+  <li>Correct ranking, with tests — this is the one part that's graded as outright right or wrong.</li>
+  <li>A real Flow-based pipeline end to end, no timers pretending to be real-time.</li>
+  <li>Nothing blocking the main thread.</li>
+  <li>The interface seam between engine and leaderboard — cheap now, expensive to retrofit later.</li>
+</ul>
+<p><strong>Cutting or deferring:</strong></p>
+<ul>
+  <li>Animation polish beyond the two effects already in place.</li>
+  <li>CI/lint tooling — valuable, but doesn't block shipping something correct.</li>
+  <li>Anti-cheat — genuinely a "once there's a real backend to be authoritative against" problem.</li>
+  <li>Any persistence — there's no offline requirement for this feature.</li>
+</ul>
+
+<h3 class="question">How would you split the work?</h3>
+<table>
+  <tr><th>Who</th><th>What they'd own</th></tr>
+  <tr><td>Junior dev</td><td>The Compose row layout and theming, wiring up the fake player list, and the straightforward ranking edge-case tests — under review.</td></tr>
+  <tr><td>Mid-level dev</td><td>Building the engine and leaderboard modules against an interface I hand them up front, plus their tests.</td></tr>
+  <tr><td>Me (lead)</td><td>Defining the module boundaries and interfaces before anyone starts, reviewing the ranking algorithm for correctness, the recomposition-avoidance approach, final integration, and the review above.</td></tr>
+</table>
+
+<h2 id="tradeoffs" class="section-divider">6. What I'd do with more time</h2>
+<ul>
+  <li>Add a fake <code>ScoreEventSource</code>/<code>LeaderboardEngine</code> and write proper
+  ViewModel tests — right now the ViewModel itself isn't directly unit-tested, only the modules
+  underneath it.</li>
+  <li>Replace the full resort with an incrementally-updated structure, so the code itself
+  demonstrates the 100k-user story instead of just this document.</li>
+  <li>Actually wire up ktlint/detekt in CI instead of leaving it as a proposal.</li>
+  <li>Give <code>ScoreEventSource</code> an error channel — right now it's a happy-path-only
+  stream, which is fine for a fake engine but wouldn't be for a real network source.</li>
+</ul>
+
+<h2 id="bonus" class="section-divider">7. A few extra ideas (optional section)</h2>
+<p>The assignment allows picking one optional item to go deeper on — I went with real unit tests
+for the ranking logic (that's in the repo, not here). The three below are just proposals, not code.</p>
+
+<h3 class="question">CI / quality checks</h3>
+<p>I'd add ktlint and detekt as a GitHub Actions job on every pull request, alongside the existing
+test suites:</p>
+<pre><code>name: CI
+on: [pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - run: ./gradlew ktlintCheck detekt test</code></pre>
+
+<h3 class="question">Anti-cheat ideas for live tournaments</h3>
+<ul>
+  <li>Make the score the server's responsibility, not the client's — the client should only ever
+  relay server-signed events, never compute its own deltas.</li>
+  <li>Flag score jumps or update rates that are statistically way outside what's normal for a
+  given game mode.</li>
+  <li>Since the fake engine is already seed-driven and deterministic, the same idea applied
+  server-side (logging the seed and inputs, not just the outputs) would let a disputed match be
+  replayed exactly for review.</li>
+</ul>
+
+<h3 class="question">Production-readiness</h3>
+<ul>
+  <li>Pagination for large boards — top N plus "your rank," as described in the scaling answer above.</li>
+  <li>Swap the fake engine for a WebSocket-backed implementation of <code>ScoreEventSource</code> — no other code needs to change.</li>
+  <li>Crash and analytics hooks for visibility once this is actually running in production.</li>
+  <li>Feature-flag the animations so they can be switched off instantly if they misbehave on low-end devices.</li>
+</ul>
+
+</body>
+</html>
