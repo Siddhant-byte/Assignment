@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.assignment.leaderboard.RankingRulesTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-07-28T21:17:19.631Z" hostname="LM0005258" time="0.001">
+  <properties/>
+  <testcase name="sorts strictly by score descending when there are no ties" classname="com.example.assignment.leaderboard.RankingRulesTest" time="0.001"/>
+  <testcase name="all players tied at zero still rank correctly" classname="com.example.assignment.leaderboard.RankingRulesTest" time="0.0"/>
+  <testcase name="ties are ordered deterministically by userId to avoid cosmetic flicker" classname="com.example.assignment.leaderboard.RankingRulesTest" time="0.0"/>
+  <testcase name="single player is rank 1" classname="com.example.assignment.leaderboard.RankingRulesTest" time="0.0"/>
+  <testcase name="empty input produces an empty leaderboard" classname="com.example.assignment.leaderboard.RankingRulesTest" time="0.0"/>
+  <testcase name="three-way tie skips the following rank by three" classname="com.example.assignment.leaderboard.RankingRulesTest" time="0.0"/>
+  <testcase name="equal scores share the same rank and the next rank skips accordingly" classname="com.example.assignment.leaderboard.RankingRulesTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
