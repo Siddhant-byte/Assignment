@@ -232,9 +232,18 @@ value immediately.
 <p>
 Collection stops once the screen isn't visible, and after five seconds with nobody watching, the
 underlying flow gets cancelled too — so the fake engine actually stops generating events while
-nobody can see them, rather than quietly burning battery in the background. Coming back to the
-foreground picks it back up immediately. The five-second delay is just there so a quick
-rotation or app-switcher glance doesn't cause a visible restart.
+nobody can see them, rather than quietly burning battery in the background. The five-second delay
+is just there so a quick rotation or app-switcher glance doesn't cause a visible restart.
+</p>
+<p>
+Coming back to the foreground reconnects and shows the same standings the leaderboard was at
+before it was backgrounded, then keeps updating live from there — it does not reset anyone's score
+or replay the match from the start. That specifically requires the running score state to live on
+the engine instances themselves (<code>RandomScoreEngine</code>, <code>DefaultLeaderboardEngine</code>),
+not inside the flow that gets cancelled — otherwise every reconnect would silently restart the
+whole simulated match from zero, which is a real bug I hit and fixed while testing this on-device
+(both engines now guard that state with a <code>Mutex</code> in case of concurrent collectors, and
+there are regression tests in both modules covering the exact "detach, then re-attach" scenario).
 </p>
 
 <h3 class="question">How would this scale to 1,000 users? To 100,000?</h3>

@@ -121,4 +121,35 @@ class RandomScoreEngineTest {
     fun `rejects an empty player pool`() {
         RandomScoreEngine(players = emptyList(), seed = 1L)
     }
+
+    @Test
+    fun `re-collecting the same engine continues the match instead of restarting it`() = runTest {
+        // Regression test for: backgrounding the app cancels the active collector, foregrounding
+        // it starts a new one on the *same* engine instance (AppContainer holds it as a
+        // singleton) - the match must continue, not silently reset every player back to 0.
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val engine = RandomScoreEngine(players, seed = 55L, dispatcher = dispatcher, clock = { 0L })
+
+        val beforePause = collectN(engine, 15)
+        val scoreBeforePause = beforePause
+            .groupBy { it.userId }
+            .mapValues { (_, events) -> events.last().newScore }
+
+        // Simulate the pause (nobody collecting) by simply not collecting for a while, then start
+        // a brand new collection - exactly what SharingStarted.WhileSubscribed does on resume.
+        val afterResume = collectN(engine, 15)
+
+        for (event in afterResume) {
+            val priorScore = scoreBeforePause[event.userId] ?: continue // not touched before pause
+            assertTrue(
+                event.newScore > priorScore,
+                "expected ${event.userId} to continue climbing from $priorScore after resuming, " +
+                    "got ${event.newScore} - looks like the match reset instead of resuming",
+            )
+        }
+
+        // The two 15-event windows must not be identical - if the engine had reset, the same
+        // seed would deterministically replay the exact same first 15 events again.
+        assertNotEquals(beforePause, afterResume)
+    }
 }

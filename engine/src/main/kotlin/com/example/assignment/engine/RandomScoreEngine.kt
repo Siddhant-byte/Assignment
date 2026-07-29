@@ -9,6 +9,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Score Generator / Game Engine module (Part 1, Module 1).
@@ -24,14 +26,26 @@ import kotlinx.coroutines.flow.flowOn
  * - Scores update at a random interval between [minDelayMs] and [maxDelayMs] (default 500-2000ms).
  * - Each tick targets a random user from [players].
  * - A user's score only ever increases (`delta` is always a positive value).
- * - The sequence is **deterministic per session**: every collection of [events] seeds a fresh
- *   [Random] with the same [seed] and starts every player at score 0, so two collections (or two
- *   engines constructed with the same [players]/[seed]) always replay the exact same sequence of
- *   events. This also doubles as a natural building block for replay-based anti-cheat auditing
- *   (see README "Anti-cheat ideas").
+ * - The match state (the [Random] generator and each player's running score) lives on the
+ *   **engine instance**, not inside the `flow {}` builder. That is deliberate: [ScoreEventSource]
+ *   is exposed as a singleton from the composition root for the lifetime of the app process (see
+ *   `AppContainer`), and collection of [events] naturally starts/stops as the UI's lifecycle-aware
+ *   `StateFlow` attaches/detaches (e.g. on backgrounding). If the state lived inside the `flow {}`
+ *   body, every fresh `collect()` after a detach would silently replay the match from score 0 -
+ *   which is exactly the bug this shape avoids: stopping collection pauses event generation
+ *   (still saves the CPU/battery cost while nobody's watching), and a later `collect()` on the
+ *   *same instance* simply continues the same match from wherever it left off.
+ * - Two *different* engine instances constructed with the same [players]/[seed] still replay the
+ *   exact same event sequence from the start (see [RandomScoreEngineTest]) - that guarantee is
+ *   what makes the [seed] useful for reproducing/debugging a specific session, and is the building
+ *   block for replay-based anti-cheat auditing (see README "Anti-cheat ideas").
+ * - Mutating [random] and [scores] is guarded by [tickMutex] so that two *concurrent* collectors
+ *   of the same instance (not expected in this app today, but cheap to guarantee) can't interleave
+ *   reads/writes of the shared state.
  *
  * @param players the pool of players this session can generate events for. Must be non-empty.
- * @param seed seeds the per-collection [Random] instance; same seed => same event sequence.
+ * @param seed seeds this instance's [Random] generator; two instances built with the same seed
+ * produce the same event sequence from the start.
  * @param sessionId tags every emitted [ScoreEvent] so consumers can distinguish sessions/replays.
  * Defaults to [seed] since, for this assignment, one seed == one session.
  * @param minDelayMs lower bound (inclusive) of the random inter-event delay, in milliseconds.
@@ -59,24 +73,24 @@ class RandomScoreEngine(
         }
     }
 
-    override val events: Flow<ScoreEvent> = flow {
-        // Fresh Random + fresh score map per collection => deterministic per session and safe
-        // for multiple independent collectors (e.g. a unit test collecting the same engine twice).
-        val random = Random(seed)
-        val scores = HashMap<String, Long>(players.size).apply {
-            players.forEach { put(it.id, 0L) }
-        }
+    /** Guards [random] and [scores] - see class doc for why this state outlives one collection. */
+    private val tickMutex = Mutex()
+    private val random = Random(seed)
+    private val scores = HashMap<String, Long>(players.size).apply {
+        players.forEach { put(it.id, 0L) }
+    }
 
+    override val events: Flow<ScoreEvent> = flow {
         while (true) {
-            val delayMs = random.nextLong(minDelayMs, maxDelayMs + 1)
+            val delayMs = tickMutex.withLock { random.nextLong(minDelayMs, maxDelayMs + 1) }
             delay(delayMs)
 
-            val player = players[random.nextInt(players.size)]
-            val delta = random.nextLong(1L, 51L) // always positive => score only increases
-            val newScore = scores.getValue(player.id) + delta
-            scores[player.id] = newScore
+            val scoreEvent = tickMutex.withLock {
+                val player = players[random.nextInt(players.size)]
+                val delta = random.nextLong(1L, 51L) // always positive => score only increases
+                val newScore = scores.getValue(player.id) + delta
+                scores[player.id] = newScore
 
-            emit(
                 ScoreEvent(
                     userId = player.id,
                     username = player.username,
@@ -84,8 +98,10 @@ class RandomScoreEngine(
                     newScore = newScore,
                     timestamp = clock(),
                     sessionId = sessionId,
-                ),
-            )
+                )
+            }
+
+            emit(scoreEvent)
         }
     }.flowOn(dispatcher)
 }

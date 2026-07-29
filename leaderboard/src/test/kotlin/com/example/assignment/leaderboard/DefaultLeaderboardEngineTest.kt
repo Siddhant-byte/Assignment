@@ -26,9 +26,9 @@ class DefaultLeaderboardEngineTest {
 
         val emissions = engine.observe(flowOf()).toList()
 
-        // With no input events at all, the only emission is the scan's empty seed - proof this
-        // module produces nothing on its own; it strictly reacts to its input.
-        assertEquals(listOf(emptyList<LeaderboardEntry>()), emissions)
+        // With no input events at all, there is nothing to rank yet, so there must be zero
+        // emissions - proof this module produces nothing on its own; it strictly reacts to input.
+        assertEquals(emptyList<List<LeaderboardEntry>>(), emissions)
     }
 
     @Test
@@ -54,10 +54,9 @@ class DefaultLeaderboardEngineTest {
 
         val emissions = engine.observe(flowOf(firstUpdate, duplicateOfFirstUpdate)).toList()
 
-        // Expect exactly 2 emissions: the scan's empty seed, then the one real ranking change.
-        // The duplicate event folds into an identical map -> identical ranked list ->
-        // distinctUntilChanged suppresses the would-be third, "flickering" emission.
-        assertEquals(2, emissions.size)
+        // Expect exactly 1 emission: the duplicate event folds into an identical map -> identical
+        // ranked list -> distinctUntilChanged suppresses the would-be second, "flickering" emission.
+        assertEquals(1, emissions.size)
         assertEquals(listOf("u1"), emissions.last().map { it.userId })
     }
 
@@ -74,5 +73,31 @@ class DefaultLeaderboardEngineTest {
 
         assertEquals(listOf("chaser", "leader"), finalState.map { it.userId })
         assertEquals(listOf(1, 2), finalState.map { it.rank })
+    }
+
+    @Test
+    fun `re-observing the same engine resumes from existing standings instead of resetting`() = runTest {
+        // Regression test: this is the exact scenario of the app being backgrounded (the upstream
+        // Flow's active collector is cancelled) and then foregrounded again (a new collector
+        // attaches). The engine instance is reused - as it always is in the real app, since
+        // AppContainer holds a singleton - and must not forget who was winning.
+        val engine = DefaultLeaderboardEngine(dispatcher = StandardTestDispatcher(testScheduler))
+
+        val firstSessionFinalState = engine
+            .observe(flowOf(event("u1", newScore = 10), event("u2", newScore = 50)))
+            .toList()
+            .last()
+        assertEquals(listOf("u2", "u1"), firstSessionFinalState.map { it.userId })
+
+        // A brand new collection of `observe` on the *same instance*, as happens on resume.
+        val afterResumeFinalState = engine
+            .observe(flowOf(event("u1", newScore = 55))) // u1 catches up and overtakes u2
+            .toList()
+            .last()
+
+        // u2's score (50) must still be known even though this second collection never saw a
+        // ScoreEvent for u2 - proof the standings survived the "detach and re-attach".
+        assertEquals(listOf("u1", "u2"), afterResumeFinalState.map { it.userId })
+        assertEquals(listOf(55L, 50L), afterResumeFinalState.map { it.score })
     }
 }

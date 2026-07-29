@@ -40,8 +40,11 @@ class LeaderboardViewModel(
                 // Keeps the upstream Flow (and therefore the fake engine's coroutine) alive for a
                 // short grace period after the last collector disappears (e.g. a rotation), but
                 // fully cancels it once the screen is gone for good (e.g. backgrounded past the
-                // grace period) - see README "Performance & Lifecycle" for the full rotation /
-                // background story.
+                // grace period). This only pauses event generation, not the match itself: both
+                // RandomScoreEngine and DefaultLeaderboardEngine keep their accumulated state on
+                // the (singleton, process-lifetime) instance rather than inside this Flow, so a
+                // later re-collection - foregrounding the app - picks the same standings back up
+                // instead of restarting from zero. See README "Performance & Lifecycle".
                 started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
                 initialValue = persistentListOf(),
             )
