@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -119,7 +120,14 @@ fun LeaderboardScreen(entries: ImmutableList<LeaderboardEntry>) {
 
 @Composable
 private fun LeaderboardHeader(playerCount: Int) {
-    Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            // Scaffold's topBar slot doesn't auto-inset a plain Column the way TopAppBar does -
+            // without this, the header draws underneath the status bar on edge-to-edge devices.
+            .statusBarsPadding(),
+    ) {
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
             Text(
                 text = "Live Leaderboard",
