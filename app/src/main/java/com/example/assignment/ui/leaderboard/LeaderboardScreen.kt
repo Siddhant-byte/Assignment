@@ -201,6 +201,19 @@ private fun EmptyState(modifier: Modifier = Modifier) {
 /** Whether a player's rank improved, worsened, or stayed the same since this row's last frame. */
 private enum class Trend { UP, DOWN, FLAT }
 
+/**
+ * Deliberately **not** a Compose `MutableState`. [LeaderboardRow] reads [value] directly in its
+ * composable body (to compute [Trend]) and writes it from a [SideEffect] right after. If [value]
+ * were a `MutableState`, that read would register this row as an observer of it, and the
+ * [SideEffect] write would then immediately schedule another recomposition of the same row - in
+ * which `entry.rank` (unchanged) gets compared against the just-updated "previous" value and
+ * always comes out [Trend.FLAT]. That echo recomposition happens before the next real frame, so
+ * the correct UP/DOWN state is computed but never actually rendered. A plain, non-snapshot holder
+ * sidesteps this entirely: reading [value] during composition creates no tracked dependency, so
+ * writing it afterwards doesn't retrigger this row.
+ */
+private class PreviousRankHolder(var value: Int)
+
 @Composable
 private fun LeaderboardRow(entry: LeaderboardEntry, modifier: Modifier = Modifier) {
     var isFirstComposition by remember(entry.userId) { mutableStateOf(true) }
@@ -208,16 +221,17 @@ private fun LeaderboardRow(entry: LeaderboardEntry, modifier: Modifier = Modifie
     var showDelta by remember(entry.userId) { mutableStateOf(false) }
     var scoreDelta by remember(entry.userId) { mutableStateOf(0L) }
     var previousScore by remember(entry.userId) { mutableStateOf(entry.score) }
-    var previousRank by remember(entry.userId) { mutableStateOf(entry.rank) }
+    val previousRank = remember(entry.userId) { PreviousRankHolder(entry.rank) }
 
     val trend = when {
-        entry.rank < previousRank -> Trend.UP
-        entry.rank > previousRank -> Trend.DOWN
+        entry.rank < previousRank.value -> Trend.UP
+        entry.rank > previousRank.value -> Trend.DOWN
         else -> Trend.FLAT
     }
     // Recorded after composition, not during, so `trend` above still compares against the rank
-    // this row had *before* this update - only then do we update our memory of "previous".
-    SideEffect { previousRank = entry.rank }
+    // this row had *before* this update - only then do we update our memory of "previous". See
+    // PreviousRankHolder's doc for why this can't be a plain Compose MutableState.
+    SideEffect { previousRank.value = entry.rank }
 
     // "Highlight + '+N' pill on score update" visual effect: scoped/reset per userId (the
     // LazyColumn key) so it never bleeds across a reordered slot.
